@@ -103,7 +103,7 @@ export class ScoresController {
             'Every row carries the full score and attendance breakdown. Staff additionally see member identity (real name, Discord global name); students see the Discord handle only.',
     })
     @ApiLeaderboardResponse()
-    @Roles(UserRole.STUDENT, UserRole.TEACHING_ASSISTANT, UserRole.ADMIN)
+    @Roles(UserRole.TEACHING_ASSISTANT, UserRole.ADMIN)
     async getCohortLeaderboard(
         @Param('cohortId', new ParseUUIDPipe()) cohortId: string,
         @GetUser() user: User,
