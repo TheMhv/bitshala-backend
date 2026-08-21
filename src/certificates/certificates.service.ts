@@ -50,21 +50,21 @@ export class CertificatesService {
     ): Promise<{ cohort: Cohort; certificateEntities: Certificate[] }> {
         const cohort = await this.cohortRepository.findOne({
             where: { id: cohortId },
+            relations: { weeks: true },
         });
 
         if (!cohort) {
             throw new ServiceError(`Cohort with id ${cohortId} not found`);
         }
 
-        if (cohort.endDate > new Date()) {
+        if (cohort.getEndDate() > new Date()) {
             throw new BadRequestException(
                 `Cohort with id ${cohortId} has not ended yet. Certificates can only be generated after the cohort ends.`,
             );
         }
 
-        const leaderboard = await this.scoresService.getCohortLeaderboard(
-            cohortId,
-        );
+        const leaderboard =
+            await this.scoresService.getCohortLeaderboard(cohortId);
 
         const absenceThresholdDays = ABSENCE_THRESHOLD_DAYS[cohort.type];
 
@@ -82,10 +82,7 @@ export class CertificatesService {
 
                 const certificateEntity = new Certificate();
                 certificateEntity.type = certificateType;
-                certificateEntity.name =
-                    entry.name ||
-                    entry.discordGlobalName ||
-                    entry.discordUsername;
+                certificateEntity.name = entry.displayName;
                 certificateEntity.cohort = cohort;
                 certificateEntity.user = {
                     id: entry.userId,
@@ -110,9 +107,8 @@ export class CertificatesService {
     async previewCertificatesForCohort(
         cohortId: string,
     ): Promise<CertificatePreviewResponseDto[]> {
-        const { certificateEntities } = await this.buildCertificateEntities(
-            cohortId,
-        );
+        const { certificateEntities } =
+            await this.buildCertificateEntities(cohortId);
         return CertificatePreviewResponseDto.fromCertificateEntities(
             certificateEntities,
         );
@@ -122,9 +118,8 @@ export class CertificatesService {
         cohortId: string,
         sendEmail: boolean,
     ): Promise<void> {
-        const { certificateEntities } = await this.buildCertificateEntities(
-            cohortId,
-        );
+        const { certificateEntities } =
+            await this.buildCertificateEntities(cohortId);
 
         // We first delete existing certificates for the cohort to avoid duplicates
         // This is to ensure that if the generation process is re-run, we don't end up with multiple
@@ -134,6 +129,18 @@ export class CertificatesService {
             this.logger.log(
                 `Saved ${certificateEntities.length} certificate records for cohort ${cohortId}`,
             );
+
+            if (certificateEntities.length > 0) {
+                const alumniTask =
+                    new APITask<TaskType.ASSIGN_COHORT_ALUMNI_ROLE>();
+                alumniTask.type = TaskType.ASSIGN_COHORT_ALUMNI_ROLE;
+                alumniTask.data = { cohortId };
+                alumniTask.executeOnTime = new Date();
+                await manager.save(alumniTask);
+                this.logger.log(
+                    `Created ASSIGN_COHORT_ALUMNI_ROLE task for cohort ${cohortId}`,
+                );
+            }
 
             if (sendEmail) {
                 const emailTask =
@@ -212,7 +219,7 @@ export class CertificatesService {
 
         const certificates = await this.certificateRepository.find({
             where: { cohort: { id: cohortId } },
-            relations: { cohort: true, user: true },
+            relations: { cohort: { weeks: true }, user: true },
         });
 
         if (certificates.length === 0) {
@@ -248,8 +255,6 @@ export class CertificatesService {
                         certificate,
                     );
 
-                const userName =
-                    user.name || user.discordGlobalName || user.discordUserName;
                 const fileName = generateCertificateFileName(
                     user.id,
                     cohort.type,
@@ -257,7 +262,7 @@ export class CertificatesService {
 
                 await this.mailService.sendCohortCertificateEmail(
                     user.email,
-                    userName,
+                    user.displayName,
                     cohortShortName,
                     season,
                     pdfBuffer,
@@ -279,7 +284,7 @@ export class CertificatesService {
         const certificate = await this.certificateRepository.findOne({
             where: { id },
             relations: {
-                cohort: true,
+                cohort: { weeks: true },
                 user: true,
             },
         });
@@ -310,7 +315,7 @@ export class CertificatesService {
     }> {
         const certificates = await this.certificateRepository.find({
             where: { cohort: { id: cohortId } },
-            relations: { cohort: true, user: true },
+            relations: { cohort: { weeks: true }, user: true },
         });
 
         if (certificates.length === 0) {

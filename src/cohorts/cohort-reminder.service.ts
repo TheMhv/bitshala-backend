@@ -38,7 +38,7 @@ export class CohortReminderService {
 
         const cohort = await this.cohortRepository.findOne({
             where: { id: cohortId },
-            relations: { users: true },
+            relations: { memberships: { user: true } },
         });
 
         if (!cohort) {
@@ -57,10 +57,11 @@ export class CohortReminderService {
             );
         }
 
-        const sessionDate = new Date(cohort.startDate);
-        sessionDate.setUTCDate(sessionDate.getUTCDate() + cohortWeek.week * 7);
+        const sessionDate = new Date(cohortWeek.scheduledDate);
 
-        const usersWithEmail = cohort.users.filter((u) => u.email);
+        const usersWithEmail = cohort.memberships
+            .map((m) => m.user)
+            .filter((u) => u.email);
 
         this.logger.log(
             `Sending ${cohortWeek.type} reminder emails to ${usersWithEmail.length} users for cohort ${cohortId}, week ${cohortWeek.week}`,
@@ -99,9 +100,6 @@ export class CohortReminderService {
         cohort: Cohort,
         sessionDate: Date,
     ): Promise<void> {
-        const userName =
-            user.name || user.discordGlobalName || user.discordUserName;
-
         if (!user.email) {
             this.logger.warn(
                 `User ${user.id} does not have an email address, skipping orientation reminder`,
@@ -111,7 +109,7 @@ export class CohortReminderService {
 
         await this.mailService.sendCohortOrientationReminderEmail(
             user.email,
-            userName,
+            user.displayName,
             cohort.type,
             this.formatDate(sessionDate),
             '8:00 PM IST',
@@ -125,8 +123,6 @@ export class CohortReminderService {
         cohort: Cohort,
         sessionDate: Date,
     ): Promise<void> {
-        const userName =
-            user.name || user.discordGlobalName || user.discordUserName;
         const season = `Season ${cohort.season.toString().padStart(2, '0')}`;
 
         if (!user.email) {
@@ -138,7 +134,7 @@ export class CohortReminderService {
 
         await this.mailService.sendCohortGdSessionReminderEmail(
             user.email,
-            userName,
+            user.displayName,
             this.mailService.getCohortShortName(cohort.type),
             season,
             this.formatDayOfWeek(sessionDate),
@@ -155,8 +151,6 @@ export class CohortReminderService {
         cohort: Cohort,
         sessionDate: Date,
     ): Promise<void> {
-        const userName =
-            user.name || user.discordGlobalName || user.discordUserName;
         const season = `Season ${cohort.season.toString().padStart(2, '0')}`;
 
         if (!user.email) {
@@ -168,7 +162,7 @@ export class CohortReminderService {
 
         await this.mailService.sendCohortGraduationReminderEmail(
             user.email,
-            userName,
+            user.displayName,
             this.mailService.getCohortShortName(cohort.type),
             season,
             this.formatDate(sessionDate),
@@ -186,7 +180,7 @@ export class CohortReminderService {
 
         const cohort = await this.cohortRepository.findOne({
             where: { id: cohortId },
-            relations: { users: true },
+            relations: { memberships: { user: true }, weeks: true },
         });
 
         if (!cohort) {
@@ -201,7 +195,9 @@ export class CohortReminderService {
                 .padStart(2, '0')}`;
             const cohortName = this.mailService.getCohortShortName(cohort.type);
 
-            const usersWithEmail = cohort.users.filter((u) => u.email);
+            const usersWithEmail = cohort.memberships
+                .map((m) => m.user)
+                .filter((u) => u.email);
 
             this.logger.log(
                 `Sending feedback reminder emails for cohort ${cohortId} to ${usersWithEmail.length} eligible users`,
@@ -229,14 +225,9 @@ export class CohortReminderService {
 
                     if (hasSubmittedFeedback) continue;
 
-                    const userName =
-                        user.name ||
-                        user.discordGlobalName ||
-                        user.discordUserName;
-
                     await this.mailService.sendCohortFeedbackReminderEmail(
                         user.email!,
-                        userName,
+                        user.displayName,
                         cohortName,
                         season,
                     );
@@ -272,7 +263,7 @@ export class CohortReminderService {
         const nextExecuteOnTime = new Date(task.executeOnTime);
         nextExecuteOnTime.setUTCDate(nextExecuteOnTime.getUTCDate() + 7);
 
-        const cutoffDate = new Date(cohort.endDate);
+        const cutoffDate = new Date(cohort.getEndDate());
         cutoffDate.setUTCDate(cutoffDate.getUTCDate() + 7);
 
         if (nextExecuteOnTime <= cutoffDate) {

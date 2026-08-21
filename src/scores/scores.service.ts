@@ -6,10 +6,13 @@ import { Repository } from 'typeorm';
 import { ExerciseScore } from '@/entities/exercise-score.entity';
 import { User } from '@/entities/user.entity';
 import {
+    CrossCohortPerformanceEntryDto,
     GetCohortScoresResponseDto,
     GetUsersScoresResponseDto,
     LeaderboardEntryDto,
     ListScoresForCohortAndWeekResponseDto,
+    PublicLeaderboardEntryDto,
+    StudentLeaderboardEntryDto,
     UsersWeekScoreResponseDto,
     WeeklyScore,
 } from '@/scores/scores.response.dto';
@@ -19,6 +22,7 @@ import {
     UpdateScoresRequestDto,
 } from '@/scores/scores.request.dto';
 import { Cohort } from '@/entities/cohort.entity';
+import { CohortMembership } from '@/entities/cohort-membership.entity';
 import { CohortWeek } from '@/entities/cohort-week.entity';
 import { CohortWeekType, UserRole } from '@/common/enum';
 
@@ -29,6 +33,8 @@ export class ScoresService {
         private readonly userRepository: Repository<User>,
         @InjectRepository(Cohort)
         private readonly cohortRepository: Repository<Cohort>,
+        @InjectRepository(CohortMembership)
+        private readonly cohortMembershipRepository: Repository<CohortMembership>,
         @InjectRepository(CohortWeek)
         private readonly cohortWeekRepository: Repository<CohortWeek>,
         @InjectRepository(GroupDiscussionScore)
@@ -94,12 +100,21 @@ export class ScoresService {
             },
         });
 
+        const memberships = await this.cohortMembershipRepository.find({
+            where: { cohort: { id: cohortId } },
+            relations: { user: true },
+        });
+        const discordRoleAssignedByUserId = new Map(
+            memberships.map((m) => [m.user.id, m.discordRoleAssigned]),
+        );
+
         return new ListScoresForCohortAndWeekResponseDto({
             scores: usersWithScores
                 .map<UsersWeekScoreResponseDto>((u) =>
                     UsersWeekScoreResponseDto.fromUserWithScore(
                         u,
                         cohortWeekId,
+                        discordRoleAssignedByUserId.get(u.id) ?? false,
                     ),
                 )
                 .sort((a, b) => {
@@ -230,64 +245,35 @@ export class ScoresService {
     }
 
     async getUserScores(id: string): Promise<GetUsersScoresResponseDto> {
-        const cohorts = (
+        const [cohorts, attendances, gdScores, exerciseScores] =
             await Promise.all([
                 this.cohortRepository.find({
-                    where: {
-                        users: { id: id },
-                        hasExercises: true,
-                        weeks: {
-                            attendances: {
-                                user: { id: id },
-                            },
-                            groupDiscussionScores: {
-                                user: { id: id },
-                            },
-                            exerciseScores: {
-                                user: { id: id },
-                            },
-                        },
-                    },
-                    relations: {
-                        weeks: {
-                            attendances: {
-                                user: true,
-                            },
-                            groupDiscussionScores: {
-                                user: true,
-                            },
-                            exerciseScores: {
-                                user: true,
-                            },
-                        },
-                    },
+                    where: { memberships: { user: { id: id } } },
+                    relations: { weeks: true },
                 }),
-                this.cohortRepository.find({
-                    where: {
-                        users: { id: id },
-                        hasExercises: false,
-                        weeks: {
-                            attendances: {
-                                user: { id: id },
-                            },
-                            groupDiscussionScores: {
-                                user: { id: id },
-                            },
-                        },
-                    },
-                    relations: {
-                        weeks: {
-                            attendances: {
-                                user: true,
-                            },
-                            groupDiscussionScores: {
-                                user: true,
-                            },
-                        },
-                    },
+                this.attendanceRepository.find({
+                    where: { user: { id: id } },
+                    relations: { cohortWeek: true },
                 }),
-            ])
-        ).flat();
+                this.groupDiscussionScoreRepository.find({
+                    where: { user: { id: id } },
+                    relations: { cohortWeek: true },
+                }),
+                this.exerciseScoreRepository.find({
+                    where: { user: { id: id } },
+                    relations: { cohortWeek: true },
+                }),
+            ]);
+
+        const attendanceByWeekId = new Map(
+            attendances.map((a) => [a.cohortWeek.id, a]),
+        );
+        const gdScoreByWeekId = new Map(
+            gdScores.map((s) => [s.cohortWeek.id, s]),
+        );
+        const exerciseScoreByWeekId = new Map(
+            exerciseScores.map((s) => [s.cohortWeek.id, s]),
+        );
 
         const cohortScore: GetCohortScoresResponseDto[] = [];
         let totalScore = 0;
@@ -299,17 +285,11 @@ export class ScoresService {
             let cohortMaxTotalScore = 0;
 
             for (const week of cohort.weeks) {
-                const attendance = week.attendances?.find(
-                    (a) => a.user.id === id,
-                );
+                const attendance = attendanceByWeekId.get(week.id);
                 const groupDiscussionScore =
-                    week.groupDiscussionScores?.find(
-                        (score) => score.user.id === id,
-                    ) ?? null;
+                    gdScoreByWeekId.get(week.id) ?? null;
                 const exerciseScore =
-                    week.exerciseScores?.find(
-                        (score) => score.user.id === id,
-                    ) ?? null;
+                    exerciseScoreByWeekId.get(week.id) ?? null;
 
                 if (attendance) {
                     const weeklyScore = WeeklyScore.fromScores(
@@ -325,6 +305,11 @@ export class ScoresService {
                 }
             }
 
+            // Only weeks with attendance records, so attendancePercent and
+            // avgScore share scorePercent's denominator (same set as weeklyScores)
+            const totalWeeks = weeklyScores.length;
+            const attendedWeeks = weeklyScores.filter((w) => w.attended).length;
+
             cohortScore.push(
                 new GetCohortScoresResponseDto({
                     cohortId: cohort.id,
@@ -333,6 +318,21 @@ export class ScoresService {
                     weeklyScores: weeklyScores,
                     totalScore: cohortTotalScore,
                     maxTotalScore: cohortMaxTotalScore,
+                    attendedWeeks: attendedWeeks,
+                    totalWeeks: totalWeeks,
+                    scorePercent:
+                        cohortMaxTotalScore === 0
+                            ? 0
+                            : Math.round(
+                                  (cohortTotalScore / cohortMaxTotalScore) *
+                                      100,
+                              ),
+                    attendancePercent:
+                        totalWeeks === 0
+                            ? 0
+                            : Math.round((attendedWeeks / totalWeeks) * 100),
+                    avgScore:
+                        totalWeeks === 0 ? 0 : cohortTotalScore / totalWeeks,
                 }),
             );
 
@@ -345,6 +345,24 @@ export class ScoresService {
             totalScore: totalScore,
             maxTotalScore: maxTotalScore,
         });
+    }
+
+    async getCrossCohortPerformance(
+        userId: string,
+    ): Promise<Record<string, CrossCohortPerformanceEntryDto>> {
+        const { cohorts } = await this.getUserScores(userId);
+
+        return Object.fromEntries(
+            cohorts.map((c) => [
+                `${c.cohortType}_S${c.seasonNumber}`,
+                new CrossCohortPerformanceEntryDto({
+                    scoreReceived: c.totalScore,
+                    maxScore: c.maxTotalScore,
+                    attendedWeeks: c.attendedWeeks,
+                    totalWeeks: c.totalWeeks,
+                }),
+            ]),
+        );
     }
 
     async assignGroupsForCohortWeek(
@@ -618,5 +636,60 @@ export class ScoresService {
                     return b.exerciseTotalScore - a.exerciseTotalScore;
                 return b.totalScore - a.totalScore;
             });
+    }
+
+    // Projects the leaderboard down to what a student may see: every score and
+    // attendance figure the authenticated view has, minus the member identity
+    // fields (real name, Discord global name). Ordering is untouched, so the
+    // client can keep deriving rank from position as it does today.
+    async getStudentCohortLeaderboard(
+        cohortId: string,
+    ): Promise<StudentLeaderboardEntryDto[]> {
+        const leaderboard = await this.getCohortLeaderboard(cohortId);
+
+        return leaderboard.map(
+            (entry) =>
+                new StudentLeaderboardEntryDto({
+                    userId: entry.userId,
+                    discordUsername: entry.discordUsername,
+                    groupDiscussionTotalScore: entry.groupDiscussionTotalScore,
+                    groupDiscussionMaxTotalScore:
+                        entry.groupDiscussionMaxTotalScore,
+                    exerciseTotalScore: entry.exerciseTotalScore,
+                    exerciseMaxTotalScore: entry.exerciseMaxTotalScore,
+                    attendanceTotalScore: entry.attendanceTotalScore,
+                    attendanceMaxTotalScore: entry.attendanceMaxTotalScore,
+                    totalScore: entry.totalScore,
+                    maxTotalScore: entry.maxTotalScore,
+                    totalAttendance: entry.totalAttendance,
+                    maxAttendance: entry.maxAttendance,
+                    totalGroupDiscussionAttendance:
+                        entry.totalGroupDiscussionAttendance,
+                    maxGroupDiscussionAttendance:
+                        entry.maxGroupDiscussionAttendance,
+                }),
+        );
+    }
+
+    // Projects the leaderboard down to what an anonymous viewer may see.
+    // Ranks come from the position in the already-sorted authenticated result,
+    // so the public ordering matches the real one and the client never needs
+    // the raw component scores to derive it. Note that ordering is primarily by
+    // exercise score (see docs/leaderboard-algorithm.md), so a lower totalScore
+    // can legitimately outrank a higher one here.
+    async getPublicCohortLeaderboard(
+        cohortId: string,
+    ): Promise<PublicLeaderboardEntryDto[]> {
+        const leaderboard = await this.getCohortLeaderboard(cohortId);
+
+        return leaderboard.map(
+            (entry, index) =>
+                new PublicLeaderboardEntryDto({
+                    rank: index + 1,
+                    discordUsername: entry.discordUsername,
+                    totalScore: entry.totalScore,
+                    maxTotalScore: entry.maxTotalScore,
+                }),
+        );
     }
 }

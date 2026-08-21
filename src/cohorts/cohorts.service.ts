@@ -1,7 +1,13 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import {
+    BadRequestException,
+    Injectable,
+    Logger,
+    NotFoundException,
+    StreamableFile,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Cohort } from '@/entities/cohort.entity';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import {
     CreateCohortRequestDto,
     JoinWaitlistRequestDto,
@@ -25,12 +31,24 @@ import { ExerciseScore } from '@/entities/exercise-score.entity';
 import { DiscordClient } from '@/discord-client/discord.client';
 import { ConfigService } from '@nestjs/config';
 import { CohortType, CohortWeekType } from '@/common/enum';
+import { CohortMembership } from '@/entities/cohort-membership.entity';
 import { CohortWaitlist } from '@/entities/cohort-waitlist.entity';
+import { Certificate } from '@/entities/certificate.entity';
 import { APITask } from '@/entities/api-task.entity';
-import { TaskType } from '@/task-processor/task.enums';
+import { APITaskStatus, TaskType } from '@/task-processor/task.enums';
+import { isLastRetry } from '@/task-processor/task-processor.utils';
+import { TWENTY_FOUR_HOURS_MS } from '@/common/durations.constants';
 import { MailService } from '@/mail/mail.service';
 import { CohortsConfigService } from '@/cohorts/cohorts.config.service';
 import { CohortCalendarService } from '@/cohort-calendar/cohort-calendar.service';
+import {
+    canViewBonusQuestions,
+    ViewerRole,
+} from '@/cohorts/cohort-access.util';
+import { createReadStream, existsSync } from 'fs';
+import { join, basename } from 'path';
+import { lookup } from 'mime-types';
+import type { Response } from 'express';
 
 @Injectable()
 export class CohortsService {
@@ -41,16 +59,30 @@ export class CohortsService {
     private readonly programmingBitcoinDiscordRoleId: string;
     private readonly bitcoinProtocolDevelopmentDiscordRoleId: string;
     private readonly masteringLightningNetworkDiscordRoleId: string;
+    private readonly buildingBitcoinInRustDiscordRoleId: string;
+
+    private readonly masteringBitcoinAlumniDiscordRoleId: string;
+    private readonly learningBitcoinFromCommandLineAlumniDiscordRoleId: string;
+    private readonly programmingBitcoinAlumniDiscordRoleId: string;
+    private readonly bitcoinProtocolDevelopmentAlumniDiscordRoleId: string;
+    private readonly masteringLightningNetworkAlumniDiscordRoleId: string;
+    private readonly buildingBitcoinInRustAlumniDiscordRoleId: string;
 
     constructor(
         @InjectRepository(Cohort)
         private readonly cohortRepository: Repository<Cohort>,
+        @InjectRepository(CohortMembership)
+        private readonly cohortMembershipRepository: Repository<CohortMembership>,
         @InjectRepository(CohortWeek)
         private readonly cohortWeekRepository: Repository<CohortWeek>,
         @InjectRepository(CohortWaitlist)
         private readonly cohortWaitlistRepository: Repository<CohortWaitlist>,
         @InjectRepository(User)
         private readonly userRepository: Repository<User>,
+        @InjectRepository(Certificate)
+        private readonly certificateRepository: Repository<Certificate>,
+        @InjectRepository(APITask)
+        private readonly apiTaskRepository: Repository<APITask<any>>,
         private readonly dbTransactionService: DbTransactionService,
         private readonly discordClient: DiscordClient,
         private readonly configService: ConfigService,
@@ -78,9 +110,41 @@ export class CohortsService {
             this.configService.getOrThrow<string>(
                 'discord.roles.masteringLightningNetwork',
             );
+        this.buildingBitcoinInRustDiscordRoleId =
+            this.configService.getOrThrow<string>(
+                'discord.roles.buildingBitcoinInRust',
+            );
+
+        this.masteringBitcoinAlumniDiscordRoleId =
+            this.configService.getOrThrow<string>(
+                'discord.roles.alumniMasteringBitcoin',
+            );
+        this.learningBitcoinFromCommandLineAlumniDiscordRoleId =
+            this.configService.getOrThrow<string>(
+                'discord.roles.alumniLearningBitcoinFromCommandLine',
+            );
+        this.programmingBitcoinAlumniDiscordRoleId =
+            this.configService.getOrThrow<string>(
+                'discord.roles.alumniProgrammingBitcoin',
+            );
+        this.bitcoinProtocolDevelopmentAlumniDiscordRoleId =
+            this.configService.getOrThrow<string>(
+                'discord.roles.alumniBitcoinProtocolDevelopment',
+            );
+        this.masteringLightningNetworkAlumniDiscordRoleId =
+            this.configService.getOrThrow<string>(
+                'discord.roles.alumniMasteringLightningNetwork',
+            );
+        this.buildingBitcoinInRustAlumniDiscordRoleId =
+            this.configService.getOrThrow<string>(
+                'discord.roles.alumniBuildingBitcoinInRust',
+            );
     }
 
-    async getCohort(cohortId: string): Promise<GetCohortResponseDto> {
+    async getCohort(
+        cohortId: string,
+        role: ViewerRole,
+    ): Promise<GetCohortResponseDto> {
         const cohort: Cohort | null = await this.cohortRepository.findOne({
             where: { id: cohortId },
             relations: { weeks: true },
@@ -92,7 +156,65 @@ export class CohortsService {
             );
         }
 
-        return GetCohortResponseDto.fromEntity(cohort);
+        return GetCohortResponseDto.fromEntity(cohort, role);
+    }
+
+    async getAttachment(
+        cohortId: string,
+        filename: string,
+        res: Response,
+        role: ViewerRole,
+    ): Promise<StreamableFile> {
+        const cohort = await this.cohortRepository.findOne({
+            where: { id: cohortId },
+            relations: { weeks: true },
+        });
+
+        if (!cohort) {
+            throw new NotFoundException(
+                `Cohort with id ${cohortId} does not exist.`,
+            );
+        }
+
+        // Prevent path traversal
+        const sanitized = basename(filename);
+        if (sanitized !== filename || filename.includes('\0')) {
+            throw new BadRequestException('Invalid filename.');
+        }
+
+        // This route resolves <cohort type>/<filename> straight off disk, so on
+        // its own it would serve bonus-question images — which are staff-only —
+        // to anyone holding the cohort id. Non-staff may only fetch a filename
+        // some non-bonus question actually references. 404 rather than 403, so
+        // the response does not confirm that a staff-only file exists.
+        const isCurriculumAttachment = cohort.weeks.some((week) =>
+            (week.questions ?? []).some((question) =>
+                (question.attachments ?? []).includes(sanitized),
+            ),
+        );
+        if (!isCurriculumAttachment && !canViewBonusQuestions(role)) {
+            throw new NotFoundException('Attachment not found.');
+        }
+
+        const dir = cohort.type.toLowerCase().replace(/_/g, '-');
+        const filePath = join(
+            __dirname,
+            '..',
+            'assets',
+            'cohort-configs',
+            'attachments',
+            dir,
+            sanitized,
+        );
+
+        if (!existsSync(filePath)) {
+            throw new NotFoundException('Attachment not found.');
+        }
+
+        const contentType = lookup(filePath) || 'application/octet-stream';
+        res.set({ 'Content-Type': contentType });
+
+        return new StreamableFile(createReadStream(filePath));
     }
 
     private mapLatestCohortsToPublicCohortResponseDto(
@@ -105,10 +227,11 @@ export class CohortsService {
                 .map(
                     (cohort) =>
                         new PublicCohortResponseDto({
+                            id: cohort.id,
                             type: cohort.type,
                             season: cohort.season,
                             startDate: cohort.startDate.toISOString(),
-                            endDate: cohort.endDate.toISOString(),
+                            endDate: cohort.getEndDate().toISOString(),
                             registrationDeadline:
                                 cohort.registrationDeadline.toISOString(),
                         }),
@@ -118,6 +241,7 @@ export class CohortsService {
 
     async listCohorts(
         query: PaginatedQueryDto,
+        role: ViewerRole,
     ): Promise<PaginatedDataDto<GetCohortResponseDto>> {
         const [cohorts, total]: [Cohort[], number] =
             await this.cohortRepository.findAndCount({
@@ -129,13 +253,16 @@ export class CohortsService {
 
         return new PaginatedDataDto({
             totalRecords: total,
-            records: cohorts.map(GetCohortResponseDto.fromEntity),
+            records: cohorts.map((cohort) =>
+                GetCohortResponseDto.fromEntity(cohort, role),
+            ),
         });
     }
 
     async listPublicCohorts(): Promise<ListAvailableCohortsResponseDto> {
         const latestCohorts = await this.cohortRepository
             .createQueryBuilder('c')
+            .leftJoinAndSelect('c.weeks', 'weeks')
             .distinctOn(['c.type'])
             .orderBy('c.type', 'ASC')
             .addOrderBy('c.season', 'DESC')
@@ -167,6 +294,11 @@ export class CohortsService {
                     latestCohorts,
                     CohortType.BITCOIN_PROTOCOL_DEVELOPMENT,
                 ),
+            [CohortType.BUILDING_BITCOIN_IN_RUST]:
+                this.mapLatestCohortsToPublicCohortResponseDto(
+                    latestCohorts,
+                    CohortType.BUILDING_BITCOIN_IN_RUST,
+                ),
         };
     }
 
@@ -177,7 +309,7 @@ export class CohortsService {
         const [cohorts, total]: [Cohort[], number] =
             await this.cohortRepository.findAndCount({
                 where: {
-                    users: { id: user.id },
+                    memberships: { user: { id: user.id } },
                 },
                 skip: query.page * query.pageSize,
                 take: query.pageSize,
@@ -187,7 +319,9 @@ export class CohortsService {
 
         return new PaginatedDataDto({
             totalRecords: total,
-            records: cohorts.map(GetCohortResponseDto.fromEntity),
+            records: cohorts.map((cohort) =>
+                GetCohortResponseDto.fromEntity(cohort, user.role),
+            ),
         });
     }
 
@@ -250,10 +384,15 @@ export class CohortsService {
                 cohort.type = cohortData.type;
                 cohort.season = season;
                 cohort.startDate = startDate;
-                cohort.endDate = endDate;
                 cohort.registrationDeadline = registrationDeadline;
                 cohort.hasExercises = hasExercises;
                 cohort.weeks = [];
+                // Snapshot links from config at creation; editable per cohort.
+                cohort.links = config.links.map((l) => ({
+                    label: l.label,
+                    url: l.url,
+                    minRole: l.minRole,
+                }));
 
                 if (hasExercises) cohort.classroomId = config.classroomId;
 
@@ -269,22 +408,58 @@ export class CohortsService {
                     week.week = weekNumber;
                     week.cohort = cohort;
 
+                    const scheduledDate = new Date(startDate);
+                    scheduledDate.setUTCDate(
+                        scheduledDate.getUTCDate() + weekNumber * 7,
+                    );
+                    week.scheduledDate = scheduledDate;
+
                     if (weekNumber === 0) {
                         week.type = CohortWeekType.ORIENTATION;
                         week.hasExercise = false;
                         week.questions = [];
-                        week.bonusQuestion = [];
+                        week.bonusQuestions = [];
+                        week.title = null;
+                        week.readingMaterial = [];
+                        week.activity = null;
+                        week.exercise = null;
                     } else if (weekNumber <= config.gdSessions) {
                         const weekConfig = config.weeks[weekNumber - 1];
                         week.type = CohortWeekType.GROUP_DISCUSSION;
                         week.hasExercise = weekConfig.hasExercise;
-                        week.questions = weekConfig.questions;
-                        week.bonusQuestion = weekConfig.bonusQuestions;
+                        week.questions = weekConfig.questions.map((q) => ({
+                            text: q.text,
+                            attachments: q.attachments ?? [],
+                        }));
+                        week.bonusQuestions = weekConfig.bonusQuestions.map(
+                            (q) => ({
+                                text: q.text,
+                                attachments: q.attachments ?? [],
+                            }),
+                        );
+                        week.title = weekConfig.title ?? null;
+                        week.readingMaterial = (
+                            weekConfig.readingMaterial ?? []
+                        ).map((r) => ({ label: r.label, url: r.url }));
+                        week.activity = weekConfig.activity ?? null;
+                        week.exercise = weekConfig.exercise
+                            ? {
+                                  title: weekConfig.exercise.title,
+                                  concepts: weekConfig.exercise.concepts,
+                                  problem: weekConfig.exercise.problem,
+                                  expectedOutput:
+                                      weekConfig.exercise.expectedOutput,
+                              }
+                            : null;
                     } else {
                         week.type = CohortWeekType.GRADUATION;
                         week.hasExercise = false;
                         week.questions = [];
-                        week.bonusQuestion = [];
+                        week.bonusQuestions = [];
+                        week.title = null;
+                        week.readingMaterial = [];
+                        week.activity = null;
+                        week.exercise = null;
                     }
 
                     cohort.weeks.push(week);
@@ -298,29 +473,18 @@ export class CohortsService {
                 apiTask.data = { cohortId: cohort.id };
                 await manager.save(apiTask);
 
-                // Schedule reminder email tasks for each week (except graduation)
-                const reminderTasks: APITask<TaskType.SEND_COHORT_REMINDER_EMAILS>[] =
-                    cohort.weeks.map((week) => {
-                        const executeOnTime = new Date(startDate);
-                        executeOnTime.setUTCDate(
-                            executeOnTime.getUTCDate() + week.week * 7,
-                        );
-                        // 12:00 PM IST = 06:30 UTC
-                        executeOnTime.setUTCHours(6, 30, 0, 0);
+                // Start the daily Discord role reconciliation recurrence.
+                // The handler self-reschedules at +24h after each run.
+                const reconcileTask =
+                    new APITask<TaskType.RECONCILE_COHORT_DISCORD_ROLES>();
+                reconcileTask.type = TaskType.RECONCILE_COHORT_DISCORD_ROLES;
+                reconcileTask.data = { cohortId: cohort.id };
+                await manager.save(reconcileTask);
 
-                        const reminderTask =
-                            new APITask<TaskType.SEND_COHORT_REMINDER_EMAILS>();
-                        reminderTask.type =
-                            TaskType.SEND_COHORT_REMINDER_EMAILS;
-                        reminderTask.data = {
-                            cohortId: cohort.id,
-                            cohortWeekId: week.id,
-                        };
-                        reminderTask.executeOnTime = executeOnTime;
-
-                        return reminderTask;
-                    });
-
+                // Schedule reminder email tasks for each week
+                const reminderTasks = cohort.weeks.map((week) =>
+                    this.createReminderTask(cohort.id, week),
+                );
                 await manager.save(reminderTasks);
 
                 // Schedule feedback reminder emails (day after 4th GD session)
@@ -348,6 +512,7 @@ export class CohortsService {
     ): Promise<void> {
         const cohort: Cohort | null = await this.cohortRepository.findOne({
             where: { id: cohortId },
+            relations: { weeks: true },
         });
 
         if (!cohort) {
@@ -362,12 +527,6 @@ export class CohortsService {
             const startDate = new Date(cohortData.startDate);
             startDate.setUTCHours(0, 0, 0, 0);
             cohort.startDate = startDate;
-
-            const config = this.cohortConfigService.getConfig(cohort.type);
-            const totalWeeks = config.gdSessions + 2;
-            const endDate = new Date(startDate);
-            endDate.setUTCDate(endDate.getUTCDate() + totalWeeks * 7);
-            cohort.endDate = endDate;
         }
         if (cohortData.registrationDeadline) {
             const registrationDeadline = new Date(
@@ -384,6 +543,36 @@ export class CohortsService {
                 cohortData.startDate &&
                 cohort.startDate.getTime() !== originalStartDate.getTime()
             ) {
+                // Shift all week scheduledDates by the same offset
+                const offsetMs =
+                    cohort.startDate.getTime() - originalStartDate.getTime();
+
+                for (const week of cohort.weeks) {
+                    week.scheduledDate = new Date(
+                        week.scheduledDate.getTime() + offsetMs,
+                    );
+                }
+                await manager.save(CohortWeek, cohort.weeks);
+
+                // Cancel all unprocessed reminder tasks and recreate with new dates
+                await manager
+                    .createQueryBuilder()
+                    .update(APITask)
+                    .set({ status: APITaskStatus.CANCELLED })
+                    .where('type = :type', {
+                        type: TaskType.SEND_COHORT_REMINDER_EMAILS,
+                    })
+                    .andWhere('status = :status', {
+                        status: APITaskStatus.UNPROCESSED,
+                    })
+                    .andWhere("data->>'cohortId' = :cohortId", { cohortId })
+                    .execute();
+
+                const reminderTasks = cohort.weeks.map((week) =>
+                    this.createReminderTask(cohort.id, week),
+                );
+                await manager.save(APITask, reminderTasks);
+
                 const apiTask =
                     new APITask<TaskType.SEND_CALENDAR_UPDATE_EMAILS>();
                 apiTask.type = TaskType.SEND_CALENDAR_UPDATE_EMAILS;
@@ -400,6 +589,7 @@ export class CohortsService {
         const cohortWeek: CohortWeek | null =
             await this.cohortWeekRepository.findOne({
                 where: { id: cohortWeekId },
+                relations: { cohort: true },
             });
 
         if (!cohortWeek) {
@@ -408,48 +598,202 @@ export class CohortsService {
             );
         }
 
-        if (cohortWeekData.questions) {
-            cohortWeek.questions = cohortWeekData.questions;
-        }
-        if (cohortWeekData.bonusQuestion) {
-            cohortWeek.bonusQuestion = cohortWeekData.bonusQuestion;
-        }
         if (cohortWeekData.classroomAssignmentId !== undefined) {
             cohortWeek.classroomAssignmentId =
                 cohortWeekData.classroomAssignmentId;
         }
 
-        await this.cohortWeekRepository.save(cohortWeek);
+        let scheduledDateChanged = false;
+
+        if (cohortWeekData.scheduledDate) {
+            const scheduledDate = new Date(cohortWeekData.scheduledDate);
+            scheduledDate.setUTCHours(0, 0, 0, 0);
+            scheduledDateChanged =
+                scheduledDate.getTime() !== cohortWeek.scheduledDate.getTime();
+            cohortWeek.scheduledDate = scheduledDate;
+        }
+
+        await this.dbTransactionService.execute(async (manager) => {
+            await manager.save(CohortWeek, cohortWeek);
+
+            if (scheduledDateChanged) {
+                // Cancel existing unprocessed reminder task for this week
+                await manager
+                    .createQueryBuilder()
+                    .update(APITask)
+                    .set({ status: APITaskStatus.CANCELLED })
+                    .where('type = :type', {
+                        type: TaskType.SEND_COHORT_REMINDER_EMAILS,
+                    })
+                    .andWhere('status = :status', {
+                        status: APITaskStatus.UNPROCESSED,
+                    })
+                    .andWhere("data->>'cohortWeekId' = :cohortWeekId", {
+                        cohortWeekId,
+                    })
+                    .execute();
+
+                // Create new reminder task with updated date
+                const reminderTask = this.createReminderTask(
+                    cohortWeek.cohort.id,
+                    cohortWeek,
+                );
+                await manager.save(APITask, reminderTask);
+
+                // Send calendar update emails
+                const calendarTask =
+                    new APITask<TaskType.SEND_CALENDAR_UPDATE_EMAILS>();
+                calendarTask.type = TaskType.SEND_CALENDAR_UPDATE_EMAILS;
+                calendarTask.data = { cohortId: cohortWeek.cohort.id };
+                await manager.save(APITask, calendarTask);
+            }
+        });
     }
 
-    async assignDiscordRole(userId: string, cohortType: CohortType) {
-        const user = await this.userRepository.findOneOrFail({
-            where: { id: userId },
+    private createReminderTask(
+        cohortId: string,
+        week: CohortWeek,
+    ): APITask<TaskType.SEND_COHORT_REMINDER_EMAILS> {
+        const executeOnTime = new Date(week.scheduledDate);
+        // 12:00 PM IST = 06:30 UTC
+        executeOnTime.setUTCHours(6, 30, 0, 0);
+
+        const task = new APITask<TaskType.SEND_COHORT_REMINDER_EMAILS>();
+        task.type = TaskType.SEND_COHORT_REMINDER_EMAILS;
+        task.data = { cohortId, cohortWeekId: week.id };
+        task.executeOnTime = executeOnTime;
+        return task;
+    }
+
+    /**
+     * Destructively overwrites all config-backed instruction-sheet content from
+     * the cohort's config: per GD week the questions, bonus questions, title,
+     * reading material, activity and exercise; and the cohort's links. Non-GD
+     * weeks have their content reset to empty. This is the ONLY way to update
+     * cohort/cohort-week content. Scheduling (dates), classroom assignment, and
+     * the structural hasExercise/classroomId flags are NOT touched.
+     */
+    async syncFromConfig(cohortId: string): Promise<void> {
+        const cohort = await this.cohortRepository.findOne({
+            where: { id: cohortId },
+            relations: { weeks: true },
         });
 
-        let roleId: string;
+        if (!cohort) {
+            throw new BadRequestException(
+                `Cohort with id ${cohortId} does not exist.`,
+            );
+        }
 
+        const config = this.cohortConfigService.getConfig(cohort.type);
+
+        for (const week of cohort.weeks) {
+            if (week.type === CohortWeekType.GROUP_DISCUSSION) {
+                const weekConfig = config.weeks[week.week - 1];
+                if (!weekConfig) continue;
+
+                week.questions = weekConfig.questions.map((q) => ({
+                    text: q.text,
+                    attachments: q.attachments ?? [],
+                }));
+                week.bonusQuestions = weekConfig.bonusQuestions.map((q) => ({
+                    text: q.text,
+                    attachments: q.attachments ?? [],
+                }));
+                week.title = weekConfig.title;
+                week.readingMaterial = weekConfig.readingMaterial.map((r) => ({
+                    label: r.label,
+                    url: r.url,
+                }));
+                week.activity = weekConfig.activity ?? null;
+                week.exercise = weekConfig.exercise
+                    ? {
+                          title: weekConfig.exercise.title,
+                          concepts: weekConfig.exercise.concepts,
+                          problem: weekConfig.exercise.problem,
+                          expectedOutput: weekConfig.exercise.expectedOutput,
+                      }
+                    : null;
+            } else {
+                week.questions = [];
+                week.bonusQuestions = [];
+                week.title = null;
+                week.readingMaterial = [];
+                week.activity = null;
+                week.exercise = null;
+            }
+        }
+
+        cohort.links = config.links.map((l) => ({
+            label: l.label,
+            url: l.url,
+            minRole: l.minRole,
+        }));
+
+        await this.dbTransactionService.execute(async (manager) => {
+            await manager.save(Cohort, cohort);
+            await manager.save(CohortWeek, cohort.weeks);
+        });
+    }
+
+    private getDiscordRoleIdForCohortType(cohortType: CohortType): string {
         switch (cohortType) {
             case CohortType.MASTERING_BITCOIN:
-                roleId = this.masteringBitcoinDiscordRoleId;
-                break;
+                return this.masteringBitcoinDiscordRoleId;
             case CohortType.LEARNING_BITCOIN_FROM_COMMAND_LINE:
-                roleId = this.learningBitcoinFromCommandLineDiscordRoleId;
-                break;
+                return this.learningBitcoinFromCommandLineDiscordRoleId;
             case CohortType.PROGRAMMING_BITCOIN:
-                roleId = this.programmingBitcoinDiscordRoleId;
-                break;
+                return this.programmingBitcoinDiscordRoleId;
             case CohortType.BITCOIN_PROTOCOL_DEVELOPMENT:
-                roleId = this.bitcoinProtocolDevelopmentDiscordRoleId;
-                break;
+                return this.bitcoinProtocolDevelopmentDiscordRoleId;
             case CohortType.MASTERING_LIGHTNING_NETWORK:
-                roleId = this.masteringLightningNetworkDiscordRoleId;
-                break;
+                return this.masteringLightningNetworkDiscordRoleId;
+            case CohortType.BUILDING_BITCOIN_IN_RUST:
+                return this.buildingBitcoinInRustDiscordRoleId;
             default:
                 throw new BadRequestException(
                     `Invalid cohort type: ${cohortType}`,
                 );
         }
+    }
+
+    private getAlumniDiscordRoleIdForCohortType(
+        cohortType: CohortType,
+    ): string {
+        switch (cohortType) {
+            case CohortType.MASTERING_BITCOIN:
+                return this.masteringBitcoinAlumniDiscordRoleId;
+            case CohortType.LEARNING_BITCOIN_FROM_COMMAND_LINE:
+                return this.learningBitcoinFromCommandLineAlumniDiscordRoleId;
+            case CohortType.PROGRAMMING_BITCOIN:
+                return this.programmingBitcoinAlumniDiscordRoleId;
+            case CohortType.BITCOIN_PROTOCOL_DEVELOPMENT:
+                return this.bitcoinProtocolDevelopmentAlumniDiscordRoleId;
+            case CohortType.MASTERING_LIGHTNING_NETWORK:
+                return this.masteringLightningNetworkAlumniDiscordRoleId;
+            case CohortType.BUILDING_BITCOIN_IN_RUST:
+                return this.buildingBitcoinInRustAlumniDiscordRoleId;
+            default:
+                throw new BadRequestException(
+                    `Invalid cohort type: ${cohortType}`,
+                );
+        }
+    }
+
+    async assignDiscordRole(userId: string, cohortId: string) {
+        const membership = await this.cohortMembershipRepository.findOne({
+            where: { user: { id: userId }, cohort: { id: cohortId } },
+            relations: { user: true, cohort: true },
+        });
+
+        if (!membership) {
+            throw new BadRequestException(
+                `User ${userId} is not enrolled in cohort ${cohortId}.`,
+            );
+        }
+
+        const { user, cohort } = membership;
+        const roleId = this.getDiscordRoleIdForCohortType(cohort.type);
 
         if (!user.isGuildMember) {
             throw new BadRequestException(
@@ -458,6 +802,165 @@ export class CohortsService {
         }
 
         await this.discordClient.attachRoleToMember(user.discordUserId, roleId);
+
+        membership.discordRoleAssigned = true;
+        await this.cohortMembershipRepository.save(membership);
+    }
+
+    async handleAssignAlumniRolesTask(
+        task: APITask<TaskType.ASSIGN_COHORT_ALUMNI_ROLE>,
+    ): Promise<void> {
+        const { cohortId } = task.data;
+
+        const cohort = await this.cohortRepository.findOne({
+            where: { id: cohortId },
+        });
+
+        if (!cohort) {
+            this.logger.warn(
+                `Cohort ${cohortId} not found, skipping alumni role assignment`,
+            );
+            return;
+        }
+
+        await this.reconcileAlumniDiscordRolesForCohort(cohort);
+    }
+
+    async handleReconcileDiscordRolesTask(
+        task: APITask<TaskType.RECONCILE_COHORT_DISCORD_ROLES>,
+    ): Promise<void> {
+        const { cohortId } = task.data;
+
+        const cohort = await this.cohortRepository.findOne({
+            where: { id: cohortId },
+            relations: { weeks: true },
+        });
+
+        if (!cohort) {
+            // Cohort deleted; stop the recurrence by not rescheduling.
+            this.logger.warn(
+                `Cohort ${cohortId} not found, stopping reconciliation recurrence`,
+            );
+            return;
+        }
+
+        const reconciliationCutoff =
+            cohort.getEndDate().getTime() + 7 * TWENTY_FOUR_HOURS_MS;
+        const shouldRequeue = Date.now() < reconciliationCutoff;
+
+        try {
+            await this.reconcileDiscordRolesForCohort(cohort);
+            if (shouldRequeue) {
+                await this.scheduleNextReconciliation(cohortId);
+            } else {
+                this.logger.log(
+                    `Cohort ${cohortId} ended over a week ago, stopping reconciliation recurrence`,
+                );
+            }
+        } catch (error) {
+            if (isLastRetry(task) && shouldRequeue) {
+                await this.scheduleNextReconciliation(cohortId);
+            }
+            throw error;
+        }
+    }
+
+    private async scheduleNextReconciliation(cohortId: string): Promise<void> {
+        const next = this.apiTaskRepository.create({
+            type: TaskType.RECONCILE_COHORT_DISCORD_ROLES,
+            data: { cohortId },
+            executeOnTime: new Date(Date.now() + TWENTY_FOUR_HOURS_MS),
+        });
+        await this.apiTaskRepository.save(next);
+    }
+
+    private async reconcileDiscordRolesForCohort(
+        cohort: Cohort,
+    ): Promise<void> {
+        const roleId = this.getDiscordRoleIdForCohortType(cohort.type);
+
+        const memberships = await this.cohortMembershipRepository.find({
+            where: { cohort: { id: cohort.id }, discordRoleAssigned: false },
+            relations: { user: true },
+        });
+
+        this.logger.log(
+            `Reconciling Discord roles for ${memberships.length} membership(s) in cohort ${cohort.id}`,
+        );
+
+        for (const membership of memberships) {
+            const { user } = membership;
+            try {
+                const guildMember = await this.discordClient.getGuildMember(
+                    user.discordUserId,
+                );
+                if (!guildMember.roles.includes(roleId)) {
+                    await this.discordClient.attachRoleToMember(
+                        user.discordUserId,
+                        roleId,
+                    );
+                }
+                membership.discordRoleAssigned = true;
+                await this.cohortMembershipRepository.save(membership);
+            } catch (error) {
+                this.logger.warn(
+                    `Failed to reconcile Discord role for user ${user.id} in cohort ${cohort.id}: ${error.message}`,
+                );
+            }
+        }
+
+        await this.reconcileAlumniDiscordRolesForCohort(cohort);
+    }
+
+    private async reconcileAlumniDiscordRolesForCohort(
+        cohort: Cohort,
+    ): Promise<void> {
+        const alumniRoleId = this.getAlumniDiscordRoleIdForCohortType(
+            cohort.type,
+        );
+
+        const certificates = await this.certificateRepository.find({
+            where: { cohort: { id: cohort.id } },
+            relations: { user: true },
+        });
+
+        if (certificates.length === 0) {
+            return;
+        }
+
+        const memberships = await this.cohortMembershipRepository.find({
+            where: {
+                cohort: { id: cohort.id },
+                user: { id: In(certificates.map((c) => c.user.id)) },
+                alumniRoleAssigned: false,
+            },
+            relations: { user: true },
+        });
+
+        this.logger.log(
+            `Reconciling alumni Discord roles for ${memberships.length} membership(s) in cohort ${cohort.id}`,
+        );
+
+        for (const membership of memberships) {
+            const { user } = membership;
+            try {
+                const guildMember = await this.discordClient.getGuildMember(
+                    user.discordUserId,
+                );
+                if (!guildMember.roles.includes(alumniRoleId)) {
+                    await this.discordClient.attachRoleToMember(
+                        user.discordUserId,
+                        alumniRoleId,
+                    );
+                }
+                membership.alumniRoleAssigned = true;
+                await this.cohortMembershipRepository.save(membership);
+            } catch (error) {
+                this.logger.warn(
+                    `Failed to reconcile alumni Discord role for user ${user.id} in cohort ${cohort.id}: ${error.message}`,
+                );
+            }
+        }
     }
 
     async addUserToCohort(userId: string, cohortId: string) {
@@ -485,10 +988,7 @@ export class CohortsService {
 
         const cohort: Cohort | null = await this.cohortRepository.findOne({
             where: { id: cohortId },
-            relations: {
-                weeks: true,
-                users: true,
-            },
+            relations: { weeks: true },
         });
 
         if (!cohort) {
@@ -503,9 +1003,9 @@ export class CohortsService {
             );
         }
 
-        const alreadyEnrolled: boolean =
-            cohort.users.some((enrolledUser) => enrolledUser.id === user.id) ??
-            false;
+        const alreadyEnrolled = await this.cohortMembershipRepository.exists({
+            where: { user: { id: user.id }, cohort: { id: cohort.id } },
+        });
 
         if (alreadyEnrolled) {
             throw new BadRequestException(
@@ -519,13 +1019,11 @@ export class CohortsService {
 
         await this.dbTransactionService.execute(
             async (manager): Promise<void> => {
-                if (!cohort.users) {
-                    cohort.users = [user];
-                } else {
-                    cohort.users.push(user);
-                }
-
-                await manager.save(cohort);
+                const membership = new CohortMembership();
+                membership.user = user;
+                membership.cohort = cohort;
+                membership.discordRoleAssigned = false;
+                await manager.save(membership);
 
                 const attendances: Attendance[] = [];
                 const groupDiscussionScores: GroupDiscussionScore[] = [];
@@ -567,16 +1065,13 @@ export class CohortsService {
                 apiTask.type = TaskType.ASSIGN_COHORT_ROLE;
                 apiTask.data = {
                     userId: user.id,
-                    cohortType: cohort.type,
+                    cohortId: cohort.id,
                 };
                 await manager.save(apiTask);
             },
         );
 
         // Send cohort joining confirmation email with calendar invite
-        const userName =
-            user.name || user.discordGlobalName || user.discordUserName;
-
         try {
             const calendarInvite =
                 await this.cohortCalendarService.generateCalendarInvite(
@@ -584,7 +1079,7 @@ export class CohortsService {
                 );
             await this.mailService.sendCohortJoiningConfirmationEmail(
                 user.email,
-                userName,
+                user.displayName,
                 cohort.type,
                 calendarInvite,
             );
@@ -612,7 +1107,6 @@ export class CohortsService {
 
         const cohort: Cohort | null = await this.cohortRepository.findOne({
             where: { id: cohortId },
-            relations: { users: true },
         });
 
         if (!cohort) {
@@ -621,9 +1115,9 @@ export class CohortsService {
             );
         }
 
-        const isEnrolled =
-            cohort.users?.some((enrolledUser) => enrolledUser.id === user.id) ??
-            false;
+        const isEnrolled = await this.cohortMembershipRepository.exists({
+            where: { user: { id: user.id }, cohort: { id: cohort.id } },
+        });
 
         if (!isEnrolled) {
             throw new BadRequestException('User is not enrolled in cohort.');
@@ -631,11 +1125,10 @@ export class CohortsService {
 
         await this.dbTransactionService.execute(
             async (manager): Promise<void> => {
-                await manager
-                    .createQueryBuilder()
-                    .relation(Cohort, 'users')
-                    .of(cohort.id)
-                    .remove(user.id);
+                await manager.delete(CohortMembership, {
+                    user: { id: user.id },
+                    cohort: { id: cohort.id },
+                });
 
                 await manager.delete(Attendance, {
                     user: { id: user.id },
@@ -685,7 +1178,7 @@ export class CohortsService {
             // Send welcome email to the user
             await this.mailService.sendWelcomeToWaitlistEmail(
                 user.email,
-                user.name || user.discordGlobalName || user.discordUserName,
+                user.displayName,
                 body.type,
             );
         } catch (error) {

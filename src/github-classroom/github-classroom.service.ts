@@ -63,6 +63,8 @@ export class GitHubClassroomService {
             if (isLastRetry(task)) {
                 await this.scheduleNextSync(data);
             }
+
+            throw error;
         }
     }
 
@@ -70,7 +72,7 @@ export class GitHubClassroomService {
         const cohort = await this.cohortRepository.findOne({
             where: { id: cohortId },
             relations: {
-                users: true,
+                memberships: { user: true },
                 weeks: true,
             },
         });
@@ -82,7 +84,7 @@ export class GitHubClassroomService {
         }
 
         const endDatePlusBuffer = new Date(
-            cohort.endDate.getTime() + TWENTY_FOUR_HOURS_MS,
+            cohort.getEndDate().getTime() + TWENTY_FOUR_HOURS_MS,
         );
         const hasCohortEnded = endDatePlusBuffer < new Date();
 
@@ -106,7 +108,8 @@ export class GitHubClassroomService {
         }
 
         const githubUsernameToUserIdMap = new Map<string, string>();
-        for (const user of cohort.users) {
+        for (const membership of cohort.memberships) {
+            const user = membership.user;
             const username = this.extractGitHubUsername(user.githubProfileUrl);
             if (username) {
                 githubUsernameToUserIdMap.set(username.toLowerCase(), user.id);

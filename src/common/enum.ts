@@ -8,6 +8,7 @@ export enum CohortType {
     PROGRAMMING_BITCOIN = 'PROGRAMMING_BITCOIN',
     BITCOIN_PROTOCOL_DEVELOPMENT = 'BITCOIN_PROTOCOL_DEVELOPMENT',
     MASTERING_LIGHTNING_NETWORK = 'MASTERING_LIGHTNING_NETWORK',
+    BUILDING_BITCOIN_IN_RUST = 'BUILDING_BITCOIN_IN_RUST',
 }
 
 export enum UserRole {
@@ -71,4 +72,84 @@ export enum FellowshipInterest {
     BITCOIN_CORE_REVIEW = 'BITCOIN_CORE_REVIEW',
     COINSWAP = 'COINSWAP',
     ANY_OTHER_PROJECT = 'ANY_OTHER_PROJECT',
+}
+
+export enum FellowshipType {
+    DEVELOPER = 'DEVELOPER',
+    DESIGNER = 'DESIGNER',
+    EDUCATOR = 'EDUCATOR',
+}
+
+// The category of an education (EDUCATOR) fellowship application: TAing a
+// cohort, running a meetup, running a club, or a free-form "other".
+export enum EducationCategory {
+    MEETUP = 'MEETUP',
+    CLUB = 'CLUB',
+    COHORT_TA = 'COHORT_TA',
+    OTHER = 'OTHER',
+}
+
+// The tier of a fellowship. STARTER_GRANT is a higher-tier, full-time,
+// invite-only variant; it is orthogonal to FellowshipType (a starter grant can
+// still be a DEVELOPER, etc.) and is set by an admin when accepting an
+// application.
+export enum FellowshipKind {
+    FELLOWSHIP = 'FELLOWSHIP',
+    STARTER_GRANT = 'STARTER_GRANT',
+}
+
+export enum FellowshipApplicationStatus {
+    DRAFT = 'DRAFT',
+    SUBMITTED = 'SUBMITTED',
+    CHANGES_REQUESTED = 'CHANGES_REQUESTED',
+    ACCEPTED = 'ACCEPTED',
+    REJECTED = 'REJECTED',
+}
+
+export enum FellowshipStatus {
+    PENDING = 'PENDING',
+    // Created on accept; one or more fellow documents are still unuploaded or rejected.
+    AWAITING_DOCUMENTS = 'AWAITING_DOCUMENTS',
+    // Both fellow documents uploaded and pending admin review.
+    DOCUMENTS_IN_REVIEW = 'DOCUMENTS_IN_REVIEW',
+    // Both fellow documents approved; start-contract is enabled.
+    DOCUMENTS_APPROVED = 'DOCUMENTS_APPROVED',
+    ACTIVE = 'ACTIVE',
+    COMPLETED = 'COMPLETED',
+}
+
+export enum FellowshipDocumentType {
+    UNSIGNED_CONTRACT = 'UNSIGNED_CONTRACT',
+    SIGNED_CONTRACT = 'SIGNED_CONTRACT',
+    W8BEN = 'W8BEN',
+}
+
+export enum FellowshipDocumentStatus {
+    AWAITING_UPLOAD = 'AWAITING_UPLOAD',
+    PENDING_REVIEW = 'PENDING_REVIEW',
+    APPROVED = 'APPROVED',
+    REJECTED = 'REJECTED',
+}
+
+// How the contract is provided when an admin accepts an application.
+// UNSIGNED (default): the admin uploads the Bitshala-signed unsigned contract and
+// the fellow signs it offline, then uploads the signed contract + W-8BEN for
+// review. PRESIGNED: the contract was signed out of band, so the admin uploads
+// the already-signed contract + W-8BEN directly and the fellow upload/review
+// step is skipped.
+export enum AcceptContractMode {
+    UNSIGNED = 'UNSIGNED',
+    PRESIGNED = 'PRESIGNED',
+}
+
+export enum FellowshipReportStatus {
+    DRAFT = 'DRAFT',
+    SUBMITTED = 'SUBMITTED',
+    APPROVED = 'APPROVED',
+    REJECTED = 'REJECTED',
+}
+
+export enum SortOrder {
+    ASC = 'ASC',
+    DESC = 'DESC',
 }

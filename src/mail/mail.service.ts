@@ -1,7 +1,8 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { MailCoreService } from '@/mail/mail.core.service';
-import { CohortType } from '@/common/enum';
+import { CohortType, FellowshipType } from '@/common/enum';
 import { ServiceError } from '@/common/errors';
+import { getCohortFullName } from '@/common/cohort-display';
 import { join } from 'path';
 import { Eta } from 'eta';
 import { MailTemplate } from '@/mail/mail.enum';
@@ -85,25 +86,8 @@ export class MailService implements OnModuleInit {
                 return 'BPD';
             case CohortType.MASTERING_LIGHTNING_NETWORK:
                 return 'LN';
-            default:
-                throw new ServiceError(
-                    `Unknown cohort type encountered: ${cohortType}`,
-                );
-        }
-    }
-
-    private getDiscordChannelCategoryName(cohortType: CohortType): string {
-        switch (cohortType) {
-            case CohortType.MASTERING_BITCOIN:
-                return 'Mastering Bitcoin';
-            case CohortType.LEARNING_BITCOIN_FROM_COMMAND_LINE:
-                return 'Learning Bitcoin from the Command Line';
-            case CohortType.PROGRAMMING_BITCOIN:
-                return 'Programming Bitcoin';
-            case CohortType.BITCOIN_PROTOCOL_DEVELOPMENT:
-                return 'Bitcoin Protocol Development';
-            case CohortType.MASTERING_LIGHTNING_NETWORK:
-                return 'Mastering the Lightning Network';
+            case CohortType.BUILDING_BITCOIN_IN_RUST:
+                return 'BBR';
             default:
                 throw new ServiceError(
                     `Unknown cohort type encountered: ${cohortType}`,
@@ -133,6 +117,10 @@ export class MailService implements OnModuleInit {
                 return this.configService.getOrThrow<string>(
                     'discord.inviteUrls.masteringLightningNetwork',
                 );
+            case CohortType.BUILDING_BITCOIN_IN_RUST:
+                return this.configService.getOrThrow<string>(
+                    'discord.inviteUrls.buildingBitcoinInRust',
+                );
             default:
                 throw new ServiceError(
                     `Unknown cohort type encountered: ${cohortType}`,
@@ -143,6 +131,7 @@ export class MailService implements OnModuleInit {
     private async sendTemplatedEmail<K extends MailTemplate>(options: {
         to: string;
         from?: string;
+        cc?: string | string[];
         subject: string;
         template: K;
         context: TemplateContextMap[K];
@@ -157,6 +146,7 @@ export class MailService implements OnModuleInit {
         await this.coreService.sendEmail({
             to: options.to,
             from: options.from,
+            cc: options.cc,
             subject: options.subject,
             html: html,
             text: text,
@@ -192,7 +182,7 @@ export class MailService implements OnModuleInit {
         calendarInvite?: string,
     ): Promise<void> {
         const cohortDisplayName = this.getCohortDisplayName(cohortType);
-        const cohortCategory = this.getDiscordChannelCategoryName(cohortType);
+        const cohortCategory = getCohortFullName(cohortType);
         const discordInviteLink = this.getCohortInviteLink(cohortType);
         const subject = `Welcome to ${cohortDisplayName} - Your enrollment is confirmed!`;
 
@@ -364,6 +354,241 @@ export class MailService implements OnModuleInit {
                 season,
             },
             icalEvent: { method: 'REQUEST', content: calendarInvite },
+        });
+    }
+
+    private getFellowshipTypeDisplayName(type: FellowshipType): string {
+        switch (type) {
+            case FellowshipType.DEVELOPER:
+                return 'Developer';
+            case FellowshipType.DESIGNER:
+                return 'Designer';
+            case FellowshipType.EDUCATOR:
+                return 'Educator';
+        }
+    }
+
+    async sendFellowshipApplicationReceivedEmail(
+        userEmail: string,
+        userName: string,
+        fellowshipType: FellowshipType,
+    ): Promise<void> {
+        const displayType = this.getFellowshipTypeDisplayName(fellowshipType);
+        const subject = `Fellowship Application Received — ${displayType}`;
+
+        return this.sendTemplatedEmail({
+            to: userEmail,
+            subject,
+            template: MailTemplate.FellowshipApplicationReceived,
+            context: {
+                userName,
+                fellowshipType: displayType,
+            },
+        });
+    }
+
+    // Deep link into the app's fellowship area where documents are downloaded and
+    // uploaded. Downloads/uploads are authenticated and proxied, so we link to the
+    // app, never to the raw download route or to Drive.
+    private buildFellowshipDocumentsUrl(fellowshipId: string): string {
+        const frontEndUrl =
+            this.configService.getOrThrow<string>('app.frontEndUrl');
+        return new URL(
+            `/fellowship/fellowships/${fellowshipId}/documents`,
+            frontEndUrl,
+        ).toString();
+    }
+
+    async sendFellowshipApplicationAcceptedEmail(
+        userEmail: string,
+        userName: string,
+        fellowshipType: FellowshipType,
+        fellowshipId: string,
+    ): Promise<void> {
+        const displayType = this.getFellowshipTypeDisplayName(fellowshipType);
+        const subject = `Welcome to the Bitshala ${displayType} Fellowship`;
+
+        return this.sendTemplatedEmail({
+            to: userEmail,
+            cc: 'fellowship@bitshala.org',
+            subject,
+            template: MailTemplate.FellowshipApplicationAccepted,
+            context: {
+                userName,
+                fellowshipType: displayType,
+                documentsUrl: this.buildFellowshipDocumentsUrl(fellowshipId),
+            },
+        });
+    }
+
+    // Acceptance where the signed contract and W-8BEN were supplied out of band
+    // by the admin. Unlike the standard accepted email, there is nothing for the
+    // fellow to upload, so this omits the contract/W-8BEN steps and the documents
+    // deep link.
+    async sendFellowshipApplicationAcceptedNoDocumentsEmail(
+        userEmail: string,
+        userName: string,
+        fellowshipType: FellowshipType,
+    ): Promise<void> {
+        const displayType = this.getFellowshipTypeDisplayName(fellowshipType);
+        const subject = `Welcome to the Bitshala ${displayType} Fellowship`;
+
+        return this.sendTemplatedEmail({
+            to: userEmail,
+            cc: 'fellowship@bitshala.org',
+            subject,
+            template: MailTemplate.FellowshipApplicationAcceptedNoDocuments,
+            context: {
+                userName,
+                fellowshipType: displayType,
+            },
+        });
+    }
+
+    async sendFellowshipDocumentRejectedEmail(
+        userEmail: string,
+        userName: string,
+        documentName: string,
+        rejectionReason: string,
+        fellowshipId: string,
+    ): Promise<void> {
+        const subject = `Action needed: your ${documentName} needs another look`;
+
+        return this.sendTemplatedEmail({
+            to: userEmail,
+            subject,
+            template: MailTemplate.FellowshipDocumentRejected,
+            context: {
+                userName,
+                documentName,
+                rejectionReason,
+                documentsUrl: this.buildFellowshipDocumentsUrl(fellowshipId),
+            },
+        });
+    }
+
+    async sendFellowshipApplicationRejectedEmail(
+        userEmail: string,
+        userName: string,
+        fellowshipType: FellowshipType,
+        reviewerRemarks: string,
+    ): Promise<void> {
+        const displayType = this.getFellowshipTypeDisplayName(fellowshipType);
+        const subject = `Update on Your ${displayType} Fellowship Application`;
+
+        return this.sendTemplatedEmail({
+            to: userEmail,
+            subject,
+            template: MailTemplate.FellowshipApplicationRejected,
+            context: {
+                userName,
+                fellowshipType: displayType,
+                reviewerRemarks,
+            },
+        });
+    }
+
+    async sendFellowshipApplicationChangesRequestedEmail(
+        userEmail: string,
+        userName: string,
+        fellowshipType: FellowshipType,
+        reviewerRemarks: string,
+    ): Promise<void> {
+        const displayType = this.getFellowshipTypeDisplayName(fellowshipType);
+        const subject = `Changes Requested — ${displayType} Fellowship Application`;
+
+        return this.sendTemplatedEmail({
+            to: userEmail,
+            subject,
+            template: MailTemplate.FellowshipApplicationChangesRequested,
+            context: {
+                userName,
+                fellowshipType: displayType,
+                reviewerRemarks,
+            },
+        });
+    }
+
+    private getMonthName(month: number): string {
+        const months = [
+            'January',
+            'February',
+            'March',
+            'April',
+            'May',
+            'June',
+            'July',
+            'August',
+            'September',
+            'October',
+            'November',
+            'December',
+        ];
+        return months[month - 1];
+    }
+
+    async sendFellowshipReportReminderEmail(
+        userEmail: string,
+        userName: string,
+        month: number,
+        year: number,
+    ): Promise<void> {
+        const monthName = this.getMonthName(month);
+        const subject = `Reminder: Submit Your Fellowship Report for ${monthName} ${year}`;
+
+        return this.sendTemplatedEmail({
+            to: userEmail,
+            subject,
+            template: MailTemplate.FellowshipReportReminder,
+            context: {
+                userName,
+                monthName,
+                year,
+            },
+        });
+    }
+
+    async sendFellowshipReportApprovedEmail(
+        userEmail: string,
+        userName: string,
+        month: number,
+        year: number,
+    ): Promise<void> {
+        const monthName = this.getMonthName(month);
+        const subject = `Fellowship Report Approved — ${monthName} ${year}`;
+
+        return this.sendTemplatedEmail({
+            to: userEmail,
+            subject,
+            template: MailTemplate.FellowshipReportApproved,
+            context: {
+                userName,
+                monthName,
+                year,
+            },
+        });
+    }
+
+    async sendFellowshipReportRejectedEmail(
+        userEmail: string,
+        userName: string,
+        month: number,
+        year: number,
+        reviewerRemarks: string,
+    ): Promise<void> {
+        const monthName = this.getMonthName(month);
+        const subject = `Fellowship Report Update — ${monthName} ${year}`;
+
+        return this.sendTemplatedEmail({
+            to: userEmail,
+            subject,
+            template: MailTemplate.FellowshipReportRejected,
+            context: {
+                userName,
+                monthName,
+                year,
+                reviewerRemarks,
+            },
         });
     }
 }

@@ -7,4 +7,13 @@ export enum MailTemplate {
     CohortCertificate = 'cohort-certificate',
     CohortFeedbackReminder = 'cohort-feedback-reminder',
     CohortCalendarUpdate = 'cohort-calendar-update',
+    FellowshipApplicationReceived = 'fellowship-application-received',
+    FellowshipApplicationAccepted = 'fellowship-application-accepted',
+    FellowshipApplicationAcceptedNoDocuments = 'fellowship-application-accepted-no-documents',
+    FellowshipApplicationRejected = 'fellowship-application-rejected',
+    FellowshipApplicationChangesRequested = 'fellowship-application-changes-requested',
+    FellowshipDocumentRejected = 'fellowship-document-rejected',
+    FellowshipReportReminder = 'fellowship-report-reminder',
+    FellowshipReportApproved = 'fellowship-report-approved',
+    FellowshipReportRejected = 'fellowship-report-rejected',
 }

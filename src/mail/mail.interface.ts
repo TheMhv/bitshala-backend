@@ -61,6 +61,65 @@ export interface CohortCalendarUpdateContext {
     season: string;
 }
 
+export interface FellowshipApplicationReceivedContext {
+    userName: string;
+    fellowshipType: string;
+}
+
+export interface FellowshipApplicationAcceptedContext {
+    userName: string;
+    fellowshipType: string;
+    // Deep link into the app where the fellow downloads the unsigned contract and
+    // uploads their signed contract and W-8BEN.
+    documentsUrl: string;
+}
+
+// Acceptance where the signed contract and W-8BEN were provided out of band by
+// the admin, so there is nothing for the fellow to upload — hence no
+// `documentsUrl`.
+export interface FellowshipApplicationAcceptedNoDocumentsContext {
+    userName: string;
+    fellowshipType: string;
+}
+
+export interface FellowshipApplicationRejectedContext {
+    userName: string;
+    fellowshipType: string;
+    reviewerRemarks: string;
+}
+
+export interface FellowshipApplicationChangesRequestedContext {
+    userName: string;
+    fellowshipType: string;
+    reviewerRemarks: string;
+}
+
+export interface FellowshipDocumentRejectedContext {
+    userName: string;
+    documentName: string;
+    rejectionReason: string;
+    documentsUrl: string;
+}
+
+export interface FellowshipReportReminderContext {
+    userName: string;
+    monthName: string;
+    year: number;
+}
+
+export interface FellowshipReportApprovedContext {
+    userName: string;
+    monthName: string;
+    year: number;
+}
+
+export interface FellowshipReportRejectedContext {
+    userName: string;
+    monthName: string;
+    year: number;
+    reviewerRemarks: string;
+}
+
 export interface TemplateContextMap {
     [MailTemplate.WelcomeToWaitlist]: WelcomeToWaitlistContext;
     [MailTemplate.CohortJoiningConfirmation]: CohortJoiningConfirmationContext;
@@ -70,4 +129,13 @@ export interface TemplateContextMap {
     [MailTemplate.CohortCertificate]: CohortCertificateContext;
     [MailTemplate.CohortFeedbackReminder]: CohortFeedbackReminderContext;
     [MailTemplate.CohortCalendarUpdate]: CohortCalendarUpdateContext;
+    [MailTemplate.FellowshipApplicationReceived]: FellowshipApplicationReceivedContext;
+    [MailTemplate.FellowshipApplicationAccepted]: FellowshipApplicationAcceptedContext;
+    [MailTemplate.FellowshipApplicationAcceptedNoDocuments]: FellowshipApplicationAcceptedNoDocumentsContext;
+    [MailTemplate.FellowshipApplicationRejected]: FellowshipApplicationRejectedContext;
+    [MailTemplate.FellowshipApplicationChangesRequested]: FellowshipApplicationChangesRequestedContext;
+    [MailTemplate.FellowshipDocumentRejected]: FellowshipDocumentRejectedContext;
+    [MailTemplate.FellowshipReportReminder]: FellowshipReportReminderContext;
+    [MailTemplate.FellowshipReportApproved]: FellowshipReportApprovedContext;
+    [MailTemplate.FellowshipReportRejected]: FellowshipReportRejectedContext;
 }

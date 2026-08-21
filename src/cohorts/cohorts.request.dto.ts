@@ -4,7 +4,6 @@ import {
     IsNotEmpty,
     IsNumberString,
     IsOptional,
-    IsString,
 } from 'class-validator';
 import { CohortType } from '@/common/enum';
 
@@ -31,22 +30,16 @@ export class CreateCohortRequestDto {
 
 export class UpdateCohortWeekRequestDto {
     @IsOptional()
-    @IsString({ each: true })
-    @IsNotEmpty({ each: true })
-    questions!: string[] | undefined;
-
-    @IsOptional()
-    @IsString({ each: true })
-    @IsNotEmpty({ each: true })
-    bonusQuestion!: string[] | undefined;
-
-    @IsOptional()
     @IsNumberString({
         no_symbols: true,
         locale: 'en-US',
     })
     @IsNotEmpty()
     classroomAssignmentId!: string | undefined;
+
+    @IsOptional()
+    @IsDateString({ strict: true })
+    scheduledDate!: string | undefined;
 }
 
 export class JoinWaitlistRequestDto {

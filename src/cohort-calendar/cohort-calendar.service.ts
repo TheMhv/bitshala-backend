@@ -37,7 +37,7 @@ export class CohortCalendarService {
 
         const cohort = await this.cohortRepository.findOne({
             where: { id: cohortId },
-            relations: { users: true, weeks: true },
+            relations: { memberships: { user: true }, weeks: true },
         });
 
         if (!cohort) {
@@ -53,11 +53,13 @@ export class CohortCalendarService {
         const cohortName = this.mailService.getCohortShortName(cohort.type);
         const season = `Season ${cohort.season.toString().padStart(2, '0')}`;
 
+        const users = cohort.memberships.map((m) => m.user);
+
         this.logger.log(
-            `Sending calendar update emails to ${cohort.users.length} users for cohort ${cohortId}`,
+            `Sending calendar update emails to ${users.length} users for cohort ${cohortId}`,
         );
 
-        for (const user of cohort.users) {
+        for (const user of users) {
             if (!user.email) {
                 this.logger.warn(
                     `User ${user.id} does not have an email address, skipping calendar update email`,
@@ -65,13 +67,10 @@ export class CohortCalendarService {
                 continue;
             }
 
-            const userName =
-                user.name || user.discordGlobalName || user.discordUserName;
-
             try {
                 await this.mailService.sendCalendarUpdateEmail(
                     user.email,
-                    userName,
+                    user.displayName,
                     cohortName,
                     season,
                     calendarInvite,
@@ -106,7 +105,6 @@ export class CohortCalendarService {
         const calendar = ical({
             name: calendarName,
             method,
-            timezone: 'Asia/Kolkata',
             x: [
                 ['X-WR-CALNAME', calendarName],
                 ['REFRESH-INTERVAL', 'P1H'],
@@ -116,8 +114,7 @@ export class CohortCalendarService {
         const sortedWeeks = [...cohort.weeks].sort((a, b) => a.week - b.week);
 
         for (const week of sortedWeeks) {
-            const eventDate = new Date(cohort.startDate);
-            eventDate.setUTCDate(eventDate.getUTCDate() + week.week * 7);
+            const eventDate = new Date(week.scheduledDate);
             eventDate.setUTCHours(14, 30, 0, 0);
 
             const endDate = new Date(eventDate);
@@ -138,7 +135,6 @@ export class CohortCalendarService {
                 description,
                 location,
                 url: DISCORD_GENERAL_INVITE_URL,
-                timezone: 'Asia/Kolkata',
             });
 
             event.createAlarm({

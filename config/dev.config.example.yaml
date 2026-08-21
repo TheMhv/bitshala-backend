@@ -31,12 +31,20 @@ discord:
     programmingBitcoin: '1165952193556389928'
     bitcoinProtocolDevelopment: '1221081628021887009'
     masteringLightningNetwork: '1394917163957227671'
+    buildingBitcoinInRust: '1529405864224755933'
+    alumniMasteringBitcoin: '1272438636473749597'
+    alumniLearningBitcoinFromCommandLine: '1272438804200030258'
+    alumniProgrammingBitcoin: '1272438904900812823'
+    alumniBitcoinProtocolDevelopment: '1272443289064312892'
+    alumniMasteringLightningNetwork: '1474033277546270770'
+    alumniBuildingBitcoinInRust: '1529406139467300916'
   inviteUrls:
     masteringBitcoin: https://discord.gg/PRYytp69TG
     learningBitcoinFromCommandLine: https://discord.gg/FCH4dCwyEk
     programmingBitcoin: https://discord.gg/MHcvqQsDHY
     bitcoinProtocolDevelopment: https://discord.gg/VT8tGxHZEC
     masteringLightningNetwork: https://discord.gg/3vweqyFcnR
+    buildingBitcoinInRust: https://discord.gg/spHkFfWcJw
 app:
   baseUrl: 'http://localhost:3000'
   frontEndUrl: 'http://localhost:5173'
@@ -49,6 +57,15 @@ app:
     sessionTtlSeconds: 604800 # 7 days
 github:
   token: '<github_personal_access_token>'
+googleDrive:
+  # Base64-encoded service-account JSON for a service account that is a member of
+  # the Workspace Shared Drive. Supply via env GOOGLE_DRIVE_SERVICE_ACCOUNT_KEY in
+  # real environments. The committed dev.config.yaml ships a harmless base64 JSON
+  # placeholder so the app boots without real Drive access.
+  serviceAccountKey: '<base64_encoded_service_account_json>'
+  sharedDriveId: '<shared_drive_id>'
+  # Optional folder within the Shared Drive; defaults to the drive root when blank.
+  rootFolderId:
 email:
   smtp:
     host: localhost

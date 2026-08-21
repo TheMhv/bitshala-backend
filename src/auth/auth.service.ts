@@ -99,10 +99,18 @@ export class AuthService {
         code: string | undefined,
     ): Promise<string> {
         if (!state) {
-            throw new UnauthorizedException('Invalid OAuth state');
+            this.logger.error(
+                'Invalid OAuth state',
+                new UnauthorizedException('Invalid OAuth state'),
+            );
+            return '';
         }
         if (!code) {
-            throw new UnauthorizedException('Missing code');
+            this.logger.error(
+                'Missing code',
+                new UnauthorizedException('Missing code'),
+            );
+            return '';
         }
 
         const tokens = await this.discordClient.exchangeCodeForTokens(code);

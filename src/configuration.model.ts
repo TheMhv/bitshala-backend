@@ -83,6 +83,27 @@ class DiscordRolesConfig {
 
     @IsNumberString({ no_symbols: true })
     masteringLightningNetwork: string;
+
+    @IsNumberString({ no_symbols: true })
+    buildingBitcoinInRust: string;
+
+    @IsNumberString({ no_symbols: true })
+    alumniMasteringBitcoin: string;
+
+    @IsNumberString({ no_symbols: true })
+    alumniLearningBitcoinFromCommandLine: string;
+
+    @IsNumberString({ no_symbols: true })
+    alumniProgrammingBitcoin: string;
+
+    @IsNumberString({ no_symbols: true })
+    alumniBitcoinProtocolDevelopment: string;
+
+    @IsNumberString({ no_symbols: true })
+    alumniMasteringLightningNetwork: string;
+
+    @IsNumberString({ no_symbols: true })
+    alumniBuildingBitcoinInRust: string;
 }
 
 class DiscordInviteUrlsConfig {
@@ -125,6 +146,14 @@ class DiscordInviteUrlsConfig {
         host_whitelist: ['discord.gg'],
     })
     masteringLightningNetwork: string;
+
+    @IsUrl({
+        protocols: ['https'],
+        require_protocol: true,
+        require_tld: true,
+        host_whitelist: ['discord.gg'],
+    })
+    buildingBitcoinInRust: string;
 }
 
 class DiscordConfig {
@@ -258,6 +287,26 @@ class GitHubConfig {
     token: string;
 }
 
+class GoogleDriveConfig {
+    // Base64-encoded service-account JSON. Decoded by the Drive client factory.
+    // In real environments this is supplied via env (GOOGLE_DRIVE_SERVICE_ACCOUNT_KEY).
+    @IsString()
+    @IsNotEmpty()
+    serviceAccountKey: string;
+
+    // The Workspace Shared Drive the service account is a member of.
+    @IsString()
+    @IsNotEmpty()
+    sharedDriveId: string;
+
+    // Optional folder within the Shared Drive to anchor per-application folders
+    // under. Defaults to the Shared Drive root when null/omitted.
+    @IsOptional()
+    @IsString()
+    @IsNotEmpty()
+    rootFolderId?: string;
+}
+
 class MailConfig {
     @IsDefined()
     @ValidateNested()
@@ -306,6 +355,11 @@ export class Config {
     @ValidateNested()
     @Type(() => GitHubConfig)
     github: GitHubConfig;
+
+    @IsDefined()
+    @ValidateNested()
+    @Type(() => GoogleDriveConfig)
+    googleDrive: GoogleDriveConfig;
 
     @ValidateNested()
     @Type(() => MonitoringConfig)

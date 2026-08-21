@@ -5,11 +5,13 @@ import { DbTransactionService } from '@/db-transaction/db-transaction.service';
 import { APITask } from '@/entities/api-task.entity';
 import { APITaskStatus, TaskType } from '@/task-processor/task.enums';
 import { ApiError, ServiceError } from '@/common/errors';
+import { DiscordAlertService } from '@/common/discord-alert.service';
 import { CohortsService } from '@/cohorts/cohorts.service';
 import { GitHubClassroomService } from '@/github-classroom/github-classroom.service';
 import { CohortReminderService } from '@/cohorts/cohort-reminder.service';
 import { CertificatesService } from '@/certificates/certificates.service';
 import { CohortCalendarService } from '@/cohort-calendar/cohort-calendar.service';
+import { FellowshipReportsService } from '@/fellowship-reports/fellowship-reports.service';
 
 @Injectable()
 export class APITaskProcessorService {
@@ -23,6 +25,8 @@ export class APITaskProcessorService {
         private readonly cohortReminderService: CohortReminderService,
         private readonly certificatesService: CertificatesService,
         private readonly cohortCalendarService: CohortCalendarService,
+        private readonly fellowshipReportsService: FellowshipReportsService,
+        private readonly discordAlert: DiscordAlertService,
     ) {}
 
     private async fetchUnprocessedTasks(): Promise<APITask<any>[]> {
@@ -73,7 +77,15 @@ export class APITaskProcessorService {
                 case TaskType.ASSIGN_COHORT_ROLE:
                     await this.cohortsService.assignDiscordRole(
                         task.data.userId,
-                        task.data.cohortType,
+                        task.data.cohortId,
+                    );
+                    break;
+                case TaskType.ASSIGN_COHORT_ALUMNI_ROLE:
+                    await this.cohortsService.handleAssignAlumniRolesTask(task);
+                    break;
+                case TaskType.RECONCILE_COHORT_DISCORD_ROLES:
+                    await this.cohortsService.handleReconcileDiscordRolesTask(
+                        task,
                     );
                     break;
                 case TaskType.SYNC_CLASSROOM_SCORES:
@@ -98,6 +110,11 @@ export class APITaskProcessorService {
                     break;
                 case TaskType.SEND_CALENDAR_UPDATE_EMAILS:
                     await this.cohortCalendarService.handleSendCalendarUpdateEmails(
+                        task,
+                    );
+                    break;
+                case TaskType.SEND_FELLOWSHIP_REPORT_REMINDER_EMAILS:
+                    await this.fellowshipReportsService.handleSendReportReminderEmails(
                         task,
                     );
                     break;
@@ -128,6 +145,11 @@ export class APITaskProcessorService {
             });
 
             wrappedError.logError(this.logger);
+            void this.discordAlert.sendErrorAlert(wrappedError, {
+                type: 'task',
+                taskId: task.id,
+                taskType: task.type,
+            });
             return;
         }
 
@@ -154,6 +176,11 @@ export class APITaskProcessorService {
             })
             .catch((error) => {
                 this.logger.error(error, error.stack);
+                const wrappedError =
+                    error instanceof ServiceError
+                        ? error
+                        : ServiceError.fromError(error);
+                void this.discordAlert.sendErrorAlert(wrappedError);
             });
     }
 }

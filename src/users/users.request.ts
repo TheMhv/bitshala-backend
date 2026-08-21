@@ -13,7 +13,9 @@ import {
     IsEnum,
     IsEmail,
 } from 'class-validator';
-import { UserRole } from '@/common/enum';
+import { Transform } from 'class-transformer';
+import { PaginatedQueryDto } from '@/common/dto';
+import { SortOrder, UserRole } from '@/common/enum';
 
 export class UpdateUserRequest {
     @IsOptional()
@@ -45,6 +47,18 @@ export class UpdateUserRequest {
     @IsUrl({ require_protocol: true })
     @MaxLength(2048)
     githubProfileUrl?: string;
+
+    /** Portfolio or side-project URL */
+    @IsOptional()
+    @IsUrl({ require_protocol: true })
+    @MaxLength(2048)
+    portfolioUrl?: string;
+
+    /** LinkedIn profile URL */
+    @IsOptional()
+    @IsUrl({ require_protocol: true })
+    @MaxLength(2048)
+    linkedinProfileUrl?: string;
 
     /** Skills */
     @IsOptional()
@@ -96,4 +110,32 @@ export class UpdateUserRoleRequest {
 
     @IsEnum(UserRole)
     role: UserRole;
+}
+
+export enum UserSortBy {
+    CREATED_AT = 'createdAt',
+    NAME = 'name',
+    EMAIL = 'email',
+}
+
+export class ListUsersQueryDto extends PaginatedQueryDto {
+    /**
+     * Case-insensitive substring match on the user's name, email and Discord
+     * usernames.
+     */
+    @IsOptional()
+    @Transform(({ value }) =>
+        typeof value === 'string' ? value.trim() : value,
+    )
+    @IsString()
+    @MaxLength(100)
+    search?: string;
+
+    @IsOptional()
+    @IsEnum(UserSortBy)
+    sortBy: UserSortBy = UserSortBy.CREATED_AT;
+
+    @IsOptional()
+    @IsEnum(SortOrder)
+    sortOrder: SortOrder = SortOrder.DESC;
 }

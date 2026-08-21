@@ -14,6 +14,23 @@ import { Attendance } from '@/entities/attendance.entity';
 import { BaseEntity } from '@/entities/base.entity';
 import { CohortWeekType } from '@/common/enum';
 
+export interface Question {
+    text: string;
+    attachments: string[];
+}
+
+export interface ReadingMaterial {
+    label: string;
+    url: string;
+}
+
+export interface Exercise {
+    title: string;
+    concepts: string;
+    problem: string;
+    expectedOutput: string[];
+}
+
 @Entity()
 @Unique(['cohort', 'week'])
 @Check(`NOT "hasExercise" OR "type" = 'GROUP_DISCUSSION'`)
@@ -31,10 +48,22 @@ export class CohortWeek extends BaseEntity {
     hasExercise!: boolean;
 
     @Column('jsonb', { default: [] })
-    questions!: string[];
+    questions!: Question[];
 
     @Column('jsonb', { default: [] })
-    bonusQuestion!: string[];
+    bonusQuestions!: Question[];
+
+    @Column('text', { nullable: true })
+    title!: string | null;
+
+    @Column('jsonb', { default: [] })
+    readingMaterial!: ReadingMaterial[];
+
+    @Column('text', { nullable: true })
+    activity!: string | null;
+
+    @Column('jsonb', { nullable: true })
+    exercise!: Exercise | null;
 
     @Column('text', { nullable: true })
     classroomInviteLink!: string | null;
@@ -44,6 +73,9 @@ export class CohortWeek extends BaseEntity {
 
     @Column('text', { nullable: true })
     classroomAssignmentId!: string | null;
+
+    @Column({ type: 'timestamp with time zone' })
+    scheduledDate!: Date;
 
     @ManyToOne(() => Cohort, (c) => c.weeks)
     cohort!: Cohort;
