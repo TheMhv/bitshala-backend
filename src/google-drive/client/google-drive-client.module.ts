@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Logger, Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { drive, auth } from '@googleapis/drive';
 import { GOOGLE_DRIVE_INJECTION_TOKEN } from '@/google-drive/client/google-drive-client.constants';
@@ -19,16 +19,21 @@ import { GoogleDriveService } from '@/google-drive/google-drive.service';
                     credentials = JSON.parse(
                         Buffer.from(encodedKey, 'base64').toString('utf8'),
                     );
+
+                    const googleAuth = new auth.GoogleAuth({
+                        credentials,
+                        scopes: ['https://www.googleapis.com/auth/drive'],
+                    });
+                    return drive({ version: 'v3', auth: googleAuth });
                 } catch {
-                    throw new Error(
+                    new Logger('GoogleDriveClientModule').error(
                         'googleDrive.serviceAccountKey must be base64-encoded service-account JSON',
+                        new Error(
+                            'googleDrive.serviceAccountKey must be base64-encoded service-account JSON',
+                        ),
                     );
+                    return null;
                 }
-                const googleAuth = new auth.GoogleAuth({
-                    credentials,
-                    scopes: ['https://www.googleapis.com/auth/drive'],
-                });
-                return drive({ version: 'v3', auth: googleAuth });
             },
         },
         GoogleDriveService,
