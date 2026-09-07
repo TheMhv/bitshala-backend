@@ -61,6 +61,7 @@ export class GetCohortResponseDto {
     classroomId!: string | null;
     links!: CohortLink[];
     weeks!: GetCohortWeekResponseDto[];
+    maxParticipants!: number;
 
     constructor(obj: GetCohortResponseDto) {
         this.id = obj.id;
@@ -76,6 +77,7 @@ export class GetCohortResponseDto {
         this.weeks = obj.weeks
             .map((week) => new GetCohortWeekResponseDto(week))
             .sort((a, b) => a.week - b.week);
+        this.maxParticipants = obj.maxParticipants;
     }
 
     // Maps the entity to the role-gated response DTO. `role` is required, so a
@@ -141,6 +143,7 @@ export class GetCohortResponseDto {
                     : (week.classroomAssignmentUrl ?? null),
                 scheduledDate: week.scheduledDate.toISOString(),
             })),
+            maxParticipants: cohort.maxParticipants,
         });
     }
 }
@@ -152,6 +155,7 @@ export class PublicCohortResponseDto {
     startDate!: string;
     endDate!: string;
     registrationDeadline!: string;
+    maxParticipants!: number;
 
     constructor(obj: PublicCohortResponseDto) {
         this.id = obj.id;
@@ -160,6 +164,7 @@ export class PublicCohortResponseDto {
         this.startDate = obj.startDate;
         this.endDate = obj.endDate;
         this.registrationDeadline = obj.registrationDeadline;
+        this.maxParticipants = obj.maxParticipants;
     }
 }
 

@@ -1,6 +1,7 @@
 import {
     IsDateString,
     IsEnum,
+    IsInt,
     IsNotEmpty,
     IsNumberString,
     IsOptional,
@@ -26,6 +27,9 @@ export class CreateCohortRequestDto {
 
     @IsDateString({ strict: true })
     registrationDeadline!: string;
+
+    @IsInt()
+    maxParticipants!: number;
 }
 
 export class UpdateCohortWeekRequestDto {
@@ -40,6 +44,9 @@ export class UpdateCohortWeekRequestDto {
     @IsOptional()
     @IsDateString({ strict: true })
     scheduledDate!: string | undefined;
+
+    @IsInt()
+    maxParticipants!: number;
 }
 
 export class JoinWaitlistRequestDto {

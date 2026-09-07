@@ -51,6 +51,9 @@ export class Cohort extends BaseEntity {
     @Column('jsonb', { default: [] })
     links!: Link[];
 
+    @Column('int', { nullable: true })
+    maxParticipants!: number;
+
     getEndDate(): Date {
         if (this.weeks === undefined || this.weeks === null) {
             throw new ServiceError(

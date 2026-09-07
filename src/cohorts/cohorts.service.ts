@@ -234,6 +234,7 @@ export class CohortsService {
                             endDate: cohort.getEndDate().toISOString(),
                             registrationDeadline:
                                 cohort.registrationDeadline.toISOString(),
+                            maxParticipants: cohort.maxParticipants,
                         }),
                 )[0] || null
         );
@@ -393,6 +394,7 @@ export class CohortsService {
                     url: l.url,
                     minRole: l.minRole,
                 }));
+                cohort.maxParticipants = cohortData.maxParticipants;
 
                 if (hasExercises) cohort.classroomId = config.classroomId;
 
@@ -976,10 +978,10 @@ export class CohortsService {
             );
         }
 
-        await this.joinCohort(user, cohortId);
+        await this.joinCohort(user, cohortId, true);
     }
 
-    async joinCohort(user: User, cohortId: string) {
+    async joinCohort(user: User, cohortId: string, force = false) {
         if (!user.email) {
             throw new BadRequestException(
                 `User must have a verified email to join a cohort.`,
@@ -1000,6 +1002,17 @@ export class CohortsService {
         if (new Date() > cohort.registrationDeadline) {
             throw new BadRequestException(
                 `Registration deadline for this cohort has passed.`,
+            );
+        }
+
+        const reachedMaxParticipant =
+            await this.cohortMembershipRepository.count({
+                where: { cohort: { id: cohort.id } },
+            });
+
+        if (reachedMaxParticipant && !force) {
+            throw new BadRequestException(
+                `This cohort has reached the maximum number of participants.`,
             );
         }
 
